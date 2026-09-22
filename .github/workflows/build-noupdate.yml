@@ -1,10 +1,19 @@
+# ==============================================================================
+# 隔离策略与设计约束：为什么必须使用独立 Tag 命名空间 'dev-v*'
+# 1. 上游仓库自带 .github/workflows/release.yml，监听 push: branches: [main] 与 tags: ['v*']；
+# 2. 上游构建时强制注入版本号：-ldflags="-s -w -X main.version=${build_version}"，这是自动更新死循环的根源；
+# 3. 若本工作流使用 'v*' 标签，推 tag 会同时触发上游 release.yml 与本工作流，造成 Release 资产撞车；
+# 4. 资产撞车会导致官方带自更新机制的二进制覆盖掉 dev 停更二进制，部署方拉取后将重新陷入自更新循环；
+# 5. 上游 'v*' 通配符无法匹配以 'dev-' 开头的 tag，因此使用 'dev-v*' 可实现工作流触发层面的严格物理隔离；
+# 6. 同时所有发布资产名均增加 '-dev' 后缀，永不与官方资产同名。
+# ==============================================================================
 name: Build NoUpdate dev binary
 
 'on':
   workflow_dispatch:
   push:
     tags:
-      - 'v*'
+      - 'dev-v*'
 
 permissions:
   contents: write
@@ -39,7 +48,7 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
-          go build -tags containers_image_openpgp -ldflags="-s -w" -o runman-agent-linux-amd64 .
+          go build -tags containers_image_openpgp -ldflags="-s -w" -o runman-agent-linux-amd64-dev .
 
       - name: Build linux/arm64 binary
         env:
@@ -47,24 +56,24 @@ jobs:
           GOOS: linux
           GOARCH: arm64
         run: |
-          go build -tags containers_image_openpgp -ldflags="-s -w" -o runman-agent-linux-arm64 .
+          go build -tags containers_image_openpgp -ldflags="-s -w" -o runman-agent-linux-arm64-dev .
 
-      - name: Verify binaries and generate SHA256SUMS
+      - name: Verify binaries and generate SHA256SUMS-dev
         run: |
-          sha256sum runman-agent-linux-amd64 runman-agent-linux-arm64 > SHA256SUMS
+          sha256sum runman-agent-linux-amd64-dev runman-agent-linux-arm64-dev > SHA256SUMS-dev
           echo "=== Generated SHA256 Checksums ==="
-          cat SHA256SUMS
+          cat SHA256SUMS-dev
           echo "=== Binary Architecture Details ==="
-          file runman-agent-linux-amd64 runman-agent-linux-arm64 || true
+          file runman-agent-linux-amd64-dev runman-agent-linux-arm64-dev || true
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: runman-agent-dev-binaries
+          name: runman-agent-dev-binaries-dev
           path: |
-            runman-agent-linux-amd64
-            runman-agent-linux-arm64
-            SHA256SUMS
+            runman-agent-linux-amd64-dev
+            runman-agent-linux-arm64-dev
+            SHA256SUMS-dev
           if-no-files-found: error
           retention-days: 30
 
@@ -78,9 +87,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            runman-agent-linux-amd64
-            runman-agent-linux-arm64
-            SHA256SUMS
+            runman-agent-linux-amd64-dev
+            runman-agent-linux-arm64-dev
+            SHA256SUMS-dev
           name: ${{ github.ref_name }}
           draft: false
           prerelease: false
