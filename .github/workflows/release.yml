@@ -2,8 +2,7 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
+    # 本 fork 已禁用 main 推送触发，避免与自编译流水线抢跑
     tags:
       - 'v*'
   workflow_dispatch:
