@@ -577,15 +577,26 @@ func (m *Manager) GetVMInfo(ctx context.Context, vmID string) (*agent.VMSummary,
 }
 
 func (m *Manager) getUsage(_ context.Context, vmID string) (cpuPct float32, memUsed, netIn, netOut int64, err error) {
+	// 优先直接从容器 network namespace 读取真实累计流量（容器视角：rx->netIn, tx->netOut）
+	hasProcNet := false
+	if in, out, pErr := m.getProcNetDev(vmID); pErr == nil {
+		netIn = in
+		netOut = out
+		hasProcNet = true
+	}
+
 	statsCtx, cancel := context.WithCancel(m.timeoutCtx())
 	defer cancel()
 
-	statsCh, err := containers.Stats(statsCtx, []string{vmID}, &containers.StatsOptions{
+	statsCh, sErr := containers.Stats(statsCtx, []string{vmID}, &containers.StatsOptions{
 		All:      ptr(false),
 		Stream:   ptr(true),
 		Interval: ptr(1),
 	})
-	if err != nil {
+	if sErr != nil {
+		if !hasProcNet {
+			err = sErr
+		}
 		return
 	}
 
@@ -597,12 +608,15 @@ func (m *Manager) getUsage(_ context.Context, vmID string) (cpuPct float32, memU
 			continue
 		}
 		for _, s := range report.Stats {
-			for name, n := range s.Network {
-				if name == "lo" {
-					continue
+			// 仅在 netns 读取失败时，回退现有 podman stats 路径
+			if !hasProcNet {
+				for name, n := range s.Network {
+					if name == "lo" {
+						continue
+					}
+					netIn += int64(n.RxBytes)
+					netOut += int64(n.TxBytes)
 				}
-				netIn += int64(n.RxBytes)
-				netOut += int64(n.TxBytes)
 			}
 			cpuPct = float32(s.CPU)
 			memUsed = int64(s.MemUsage)
@@ -614,17 +628,6 @@ func (m *Manager) getUsage(_ context.Context, vmID string) (cpuPct float32, memU
 			break
 		}
 		break
-	}
-
-	// 兼容 Podman 4.x (如 Debian 12 官方源默认版本)：
-	// Podman 4.x 的 stats 响应中网络统计仅存在于顶层 NetInput/NetOutput 字段，无 Network 字典，
-	// 导致 s.Network 为空，netIn 与 netOut 仍为 0。
-	// 此时通过读取容器 network namespace 对应的 /proc/<pid>/net/dev 获取真实累计网络流量。
-	if netIn == 0 && netOut == 0 {
-		if in, out, pErr := m.getProcNetDev(vmID); pErr == nil {
-			netIn = in
-			netOut = out
-		}
 	}
 
 	return

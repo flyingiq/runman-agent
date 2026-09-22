@@ -129,16 +129,21 @@ func (s *Service) syncOnce(ctx context.Context) {
 				UpdatedAt: now,
 			}
 		} else {
+			// 当本轮采样全 0 且库里已有有效 raw 值时，跳过本轮（不写库），避免把 0 沉淀到 Raw 导致后续全量重加
+			if netStats.InBytes == 0 && netStats.OutBytes == 0 && (traffic.RawIn > 0 || traffic.RawOut > 0) {
+				continue
+			}
+
 			// 已有记录，计算增量
 			deltaIn := netStats.InBytes - traffic.RawIn
 			deltaOut := netStats.OutBytes - traffic.RawOut
 
-			// 计数器重置（如容器/宿主机重启），将当前 raw 值全量计入增量
+			// 计数器回退（如容器/宿主机重启），钳制为 0，杜绝全量重加
 			if deltaIn < 0 {
-				deltaIn = netStats.InBytes
+				deltaIn = 0
 			}
 			if deltaOut < 0 {
-				deltaOut = netStats.OutBytes
+				deltaOut = 0
 			}
 
 			// 累计到总数
