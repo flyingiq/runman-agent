@@ -1,0 +1,87 @@
+name: Build NoUpdate dev binary
+
+'on':
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and Package NoUpdate Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Pre-build assertion (No -X main.version allowed)
+        run: |
+          echo "=== Verifying build command invariants ==="
+          BUILD_LDFLAGS="-s -w"
+          if echo "$BUILD_LDFLAGS" | grep -E "(-X\s+main\.version|-X\s+version)"; then
+            echo "ERROR: -X main.version detected! Building with version tag activates auto-updater loop." >&2
+            exit 1
+          fi
+          echo "PASS: -X main.version is absent. Binary version will remain 'dev' to prevent auto-updates."
+
+      - name: Build linux/amd64 binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -tags containers_image_openpgp -ldflags="-s -w" -o runman-agent-linux-amd64 .
+
+      - name: Build linux/arm64 binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: arm64
+        run: |
+          go build -tags containers_image_openpgp -ldflags="-s -w" -o runman-agent-linux-arm64 .
+
+      - name: Verify binaries and generate SHA256SUMS
+        run: |
+          sha256sum runman-agent-linux-amd64 runman-agent-linux-arm64 > SHA256SUMS
+          echo "=== Generated SHA256 Checksums ==="
+          cat SHA256SUMS
+          echo "=== Binary Architecture Details ==="
+          file runman-agent-linux-amd64 runman-agent-linux-arm64 || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: runman-agent-dev-binaries
+          path: |
+            runman-agent-linux-amd64
+            runman-agent-linux-arm64
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      # 选用 softprops/action-gh-release@v2 而非 gh release create：
+      # 1. GitHub Actions 原生成熟组件，无需在 Runner 维护额外的 CLI 脚本与调用复杂参数；
+      # 2. 声明式配置多资产（多文件列表）原子上传，内置网络重试机制；
+      # 3. 自动读取 GITHUB_TOKEN 权限并自动生成版本 Release Notes；
+      # 4. 严守 ref_type == 'tag' 判定，workflow_dispatch 手动触发时 ref_type 为 branch，绝不误发 Release。
+      - name: Publish GitHub Release (Tag push only)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            runman-agent-linux-amd64
+            runman-agent-linux-arm64
+            SHA256SUMS
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
