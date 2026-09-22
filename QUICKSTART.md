@@ -37,12 +37,16 @@ journalctl -u narwhal-agent -n 50 --no-pager | grep -E "exiting for update|speed
 BAK_TS=$(date +%Y%m%d_%H%M%S)
 cp -f /opt/narwhal-agent/narwhal-agent "/root/narwhal-agent.bak.${BAK_TS}"
 
-# 2. 下载免更 Dev 版二进制
-URL_BIN="https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.2-selfbuild2/runman-agent-linux-amd64-dev"
-EXPECTED_SHA="f0c2905bc9ed65cfdedd4a6afbba5e0936a364e70757d84455eaca6c1defb8d1"
+# 2. 停用并拔除冲突的第三方补账脚本（若存在，避免 raw 归零导致全量重加）
+systemctl stop narwhal-traffic-guard.service 2>/dev/null || true
+systemctl disable narwhal-traffic-guard.service 2>/dev/null || true
+
+# 3. 下载免更 Dev 修复版二进制（含自更死循环根治 + 流量统计防虚高补丁）
+URL_BIN="https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.3-trafficfix/runman-agent-linux-amd64-dev"
+EXPECTED_SHA="8c317d43ce953637fc7f4f68ebff3b85a5e4433443fed18567420c5020f4f61c"
 curl -fsSL -o /tmp/runman-agent-dev "$URL_BIN"
 
-# 3. 强校验 SHA256 哈希，若不符立即中断退出
+# 4. 强校验 SHA256 哈希，若不符立即中断退出
 ACTUAL_SHA=$(sha256sum /tmp/runman-agent-dev | awk '{print $1}')
 if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
     echo "[-] SHA256 校验失败: $ACTUAL_SHA 不符预期" >&2
@@ -51,13 +55,13 @@ if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
 fi
 echo "[+] SHA256 校验通过: $ACTUAL_SHA"
 
-# 4. 解锁、原子安装并加锁防篡改 (+i 阻止任何进程覆写)
+# 5. 解锁、原子安装并加锁防篡改 (+i 阻止任何进程覆写)
 chattr -i /opt/narwhal-agent/narwhal-agent 2>/dev/null || true
 install -m 0755 /tmp/runman-agent-dev /opt/narwhal-agent/narwhal-agent
 rm -f /tmp/runman-agent-dev
 chattr +i /opt/narwhal-agent/narwhal-agent
 
-# 5. 重启服务
+# 6. 重启服务
 systemctl restart narwhal-agent
 ```
 
@@ -80,12 +84,13 @@ ss -tulpn | grep -q ":8792" && echo "PASS: 断言3通过" || echo "FAIL: 断言3
 
 ---
 
-## 5. 反面清单（母鸡站长四条绝对禁忌）
+## 5. 反面清单（母鸡站长五条绝对禁忌）
 
 1. **严禁在 Debian 12 强行混源升级 Podman 5.4.2**：Trixie 的 Podman 依赖 `libc6 >= 2.38`，强行引入混合源会毁坏 Debian 12 的 `libc6 2.36` 底座（构成 FrankenDebian），导致母鸡崩盘。
 2. **严禁下载 releases/latest 直链**：GitHub `latest` 会被官方发布抢占，拉下来的包带 `-X main.version`，启动后立刻再次自毁。
 3. **严禁打 `v*` 开头的 Tag 出包**：会意外触发上游官方 `release.yml` 撞车覆盖；必须使用 `dev-v*` 命名空间。
 4. **严禁在 Debian 12 直接跑上游最新 install.sh**：其 `check_podman_version()` 会在检测到 4.3.1 时直接 `exit 1`，中断全部初始化。
+5. **严禁保留或部署把 raw 置 0 的第三方流量补账脚本（如 narwhal-traffic-guard.py）**：该脚本每次写库把 `raw_in=0, raw_out=0`，直接诱发 Agent 遇 0 触发全量重复累加，造成 +4.4 GB/分钟 的虚假流量海啸！详见 [TRAFFIC-FIX.md](TRAFFIC-FIX.md)。
 
 ---
 
@@ -107,12 +112,15 @@ ss -tulpn | grep -q ":8792" && echo "PASS: 断言3通过" || echo "FAIL: 断言3
 
 ## 7. 产物档案与指纹
 
-- **发行标签**: `dev-v0.3.2-selfbuild2`
-- **下载直链**: `https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.2-selfbuild2/runman-agent-linux-amd64-dev`
-- **文件 SHA256**: `f0c2905bc9ed65cfdedd4a6afbba5e0936a364e70757d84455eaca6c1defb8d1`
-- **校验和直链**: `https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.2-selfbuild2/SHA256SUMS-dev`
-- **包含上游修复**: commit `0da61a14e2`（修复 Podman 4.x 租户流量显示 0.0）
+- **发行标签**: `dev-v0.3.3-trafficfix`
+- **下载直链**: `https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.3-trafficfix/runman-agent-linux-amd64-dev`
+- **文件 SHA256**: `8c317d43ce953637fc7f4f68ebff3b85a5e4433443fed18567420c5020f4f61c`
+- **校验和直链**: `https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.3-trafficfix/SHA256SUMS-dev`
+- **包含上游与自编译修复**:
+  1. commit `0da61a14e2`（修复 Podman 4.x 租户流量显示 0.0）
+  2. commit `a90e183`（流量修复：消除非单调回退导致的全量重复累加 + 修正 in/out 颠倒）
 - **停更自证方法**: `go version -m runman-agent-linux-amd64-dev | grep ldflags` 输出仅包含 `-s -w`，无 `-X main.version`。
+- **流量专项排障**: 详见 [TRAFFIC-FIX.md](TRAFFIC-FIX.md)（含 30 秒自检、停机小鸡真值恢复与一键脚本 `scripts/fix-traffic.sh`）。
 
 ---
 

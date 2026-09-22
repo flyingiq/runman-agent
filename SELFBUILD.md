@@ -2,11 +2,12 @@
 
 本文档说明 `flyingiq/runman-agent` 的定制自编译工作流、为什么需要自编译、与上游官方工作流的物理隔离策略、如何触发构建出包、显式版本直链下载方式、上游同步方案及授权说明。
 
-> 🚑 **只想快速把母鸡修好？** 直接看 [QUICKSTART.md](QUICKSTART.md) —— 5 分钟一键修复（含 30 秒自检、自动备份、SHA256 强校验与三条验收断言）。
+> 🚑 **只想快速把母鸡修好？** 直接看 [QUICKSTART.md](QUICKSTART.md) —— 5 分钟一键修复（含 30 秒自检、自动备份、SHA256 强校验与三条验收断言）。  
+> 📊 **遭遇流量统计虚高或客户被超额误停？** 详见 [TRAFFIC-FIX.md](TRAFFIC-FIX.md) —— 30 秒自检、双层真因剖析、停机小鸡真值恢复与一键脚本。
 
 ---
 
-## 1. 为什么自编译（源码级彻底停更机制）
+## 1. 为什么自编译（源码级彻底停更机制与核心补丁注入）
 
 - **上游自动更新机制**：上游 `runman-agent` 内置自动更新服务（`updater/updater.go`）。当构建时通过 `-ldflags "-X main.version=...\"` 注入版本号（如 release tag 或 commit SHA）时，Agent 会定期比对并从上游 Releases 强制下载新二进制覆盖本地文件并重启。这会导致定制修复（例如 Podman 4 流量统计补丁）被强行覆写，严重时导致崩溃死循环。
 - **源码级停更防御**：根据 `updater/updater.go` 第 94-98 行代码：
@@ -19,6 +20,8 @@
   ```
   在 `main.go` 中，默认 `var version = "dev"`。
   只要编译参数中**严禁注入 `-X main.version`**，二进制内部版本恒定为 `"dev"`。更新服务在启动时即直接返回退出，从源码逻辑上彻底阻断更新器运行与回滚。
+- **自编译关键修复补丁注入**：
+  官方主线代码存在流式 stats 误用与计数器回退重加缺陷，导致 Debian 12 节点流量虚高数十倍（触发超额停机）。自编译分支必须包含 commit `a90e183`（流量修复补丁），否则产出的二进制虽然切断了自更，但仍存在严重的计量失真隐患。
 
 ---
 
@@ -92,19 +95,21 @@ GitHub 的 `/releases/latest` 别名会解析为仓库中“最新创建且未�
 
 因此，**全流程彻底弃用 `releases/latest`，统一改用确定性的显式版本 URL**。
 
-### 显式版本直链格式（以 `dev-v0.3.3` 为例）
+### 显式版本直链格式（以当前最新 `dev-v0.3.3-trafficfix` 为例）
 
 - **linux/amd64 直链**：
   ```
-  https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.3/runman-agent-linux-amd64-dev
+  https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.3-trafficfix/runman-agent-linux-amd64-dev
   ```
+  - **SHA256**: `8c317d43ce953637fc7f4f68ebff3b85a5e4433443fed18567420c5020f4f61c`
 - **linux/arm64 直链**：
   ```
-  https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.3/runman-agent-linux-arm64-dev
+  https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.3-trafficfix/runman-agent-linux-arm64-dev
   ```
+  - **SHA256**: `a7c7b34ff4ee6e1946ce0a47ea37cee80650924c5a36d15a9b6e81a5fcb98522`
 - **SHA256 校验和直链**：
   ```
-  https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.3/SHA256SUMS-dev
+  https://github.com/flyingiq/runman-agent/releases/download/dev-v0.3.3-trafficfix/SHA256SUMS-dev
   ```
 
 > ℹ️ **节点网络连通性说明**：
@@ -146,6 +151,10 @@ curl -L \
   - Fine-grained PAT：需对 `flyingiq/runman-agent` 仓库授予 `Contents` 读写权限（`Contents: Read and write`）。
 
 同步完成后，推送新的 Tag（如 `dev-v0.3.4`）或在 Actions 页面点击手动触发，即可一键获得合并上游最新代码后的 dev 版二进制。
+
+> ⚠️ **出包铁律：务必合入流量修复补丁**  
+> 上游官方代码目前尚未合入流量统计修复补丁，若直接基于上游 `main` 出包，产物仍会受到“流式 stats 瞬时帧 + 计数器回退全量重加”影响，导致流量虚高 3~182 倍！  
+> 在推送新 Tag 前，务必确认当前构建分支已 cherry-pick 或合并 commit `a90e183`（或应用 `traffic-fix.patch`），并通过 `go test ./traffic/... ./db/...` 验证。详情见 [TRAFFIC-FIX.md](TRAFFIC-FIX.md)。
 
 ---
 
