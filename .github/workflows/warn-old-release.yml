@@ -1,0 +1,47 @@
+name: Warn Old Release
+
+# 用途：给历史遗留的 release 正文追加「不含流量修复」警告注记。
+# 为什么用 Actions 而不是本地 token：MCP 的 OAuth token 对 releases 无写权限（403），
+# 而仓库自带的 GITHUB_TOKEN 具备 contents:write，可安全完成该操作。
+#
+# 触发方式：修改本文件被推送到仓库时自动触发，或在 Actions 页面手动 workflow_dispatch。
+# 幂等：正文中已含警告特征词时直接跳过。
+
+on:
+  push:
+    paths:
+      - '.github/workflows/warn-old-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  warn:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 给旧 release 追加警告注记（幂等）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: dev-v0.3.2-selfbuild2
+          MARKER: 不含流量修复
+        run: |
+          set -euo pipefail
+          OLD=$(gh release view "$TAG" --repo "$REPO" --json body -q .body 2>/dev/null || echo "")
+          if [[ -z "$OLD" ]]; then
+            echo "::error::未找到 release $TAG"; exit 1
+          fi
+          if grep -q "$MARKER" <<< "$OLD"; then
+            echo "✅ 警告注记已存在，跳过（幂等）"; exit 0
+          fi
+          WARN_FILE="docs/release-warnings/${TAG}.md"
+          if [[ ! -f "$WARN_FILE" ]]; then
+            echo "::error::缺少警告文本文件 $WARN_FILE"; exit 1
+          fi
+          { cat "$WARN_FILE"; printf '\n---\n\n'; printf '%s\n' "$OLD"; } > /tmp/new-body.md
+          gh release edit "$TAG" --repo "$REPO" --notes-file /tmp/new-body.md
+          echo "✅ 已为 $TAG 写入警告注记"
+          gh release view "$TAG" --repo "$REPO" --json body -q .body | head -3
