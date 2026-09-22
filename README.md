@@ -30,6 +30,7 @@
 - 📊 **[TRAFFIC-FIX.md](TRAFFIC-FIX.md)** — 流量统计虚高根治（30 秒自检 · 双层真因剖析 · 停机实例真值恢复 · 一键脚本）
 - 📦 **[SELFBUILD.md](SELFBUILD.md)** — 自编译出包指南（免更 Dev 版 + 流量修复补丁注入铁律）
 - 🛠️ **[scripts/fix-traffic.sh](scripts/fix-traffic.sh)** — 流量虚高一键修复（`--calibrate` 对存量虚高数据做物理校准）
+- ⚙️ **[RELEASE-YML-SILENCE.md](RELEASE-YML-SILENCE.md)** — Fork 后必做：静默上游 `release.yml` 的 main 分支触发（避免 CI 噪音与抢跑）
 
 | 版本 | 说明 |
 | --- | --- |
