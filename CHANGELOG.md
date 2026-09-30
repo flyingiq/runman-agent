@@ -17,7 +17,7 @@
 
 - **`manager/incus/incus.go`：builder 创建失败时如实上抛真实原因**（commit `022f38ca7c`）
   - 旧版：`_ = op.Wait()` 把创建操作的错误丢弃，于是"镜像拉取/解包/存储不足"这类异步失败，会在随后启动 builder 时被伪装成
-    `Failed to fetch instance 'builder-<ts>' in project 'default': Instance not found` —— **报错误导，根因被藏起来**。
+    `Failed to fetch instance 'builder-<ts>' in project 'default': Instance not found` —— **该提示具有误导性，真实原因被掩盖**。
   - 新版：先注册清理（失败不留半成品），再校验创建结果，报错形如
     `builder create failed (base=<别名>, builder=<名>): <真实原因>`。
   - **注意**：如果你在**旧版本**的失败现场看到残留的 `builder-<时间戳>` 容器，可安全删除：
@@ -35,10 +35,10 @@
 5. **对接 Token 不要共用**：每个部署方 / 每台母鸡单独签发，出事只废一个；装完确认 agent 的 `:8792` **不要在公网裸奔**（只让面板可达）。
 6. **本仓库是公开仓库**：任何真实面板地址、对接 Token、证书私钥都不要提交上来。
 
-### 速查：Alpine 装不上 / 实例"一直在重装"
+### 速查：Alpine 无法创建 / 实例反复重装
 
 Alpine 与 Debian 走的**基础镜像来源不同**：Alpine 优先用**本地定制基础镜像**，Debian 走私有镜像站 → 失败再回退上游。
-所以「**Debian 能装、Alpine 装不上**」的第一嫌疑是**别名没命中**（见下节"定案"），其次才是基础镜像缺失或类型不对。
+因此出现「**Debian 可创建、Alpine 不可创建**」时，应首先排查**别名是否命中**（见下节「结论」），其次再排查基础镜像缺失或类型不符。
 
 ```bash
 incus image alias list | grep -iE "alpine|ready"          # 本地定制基础镜像别名是否存在
@@ -50,9 +50,9 @@ journalctl -u incus --since '30 min ago' | tail -40       # 真实失败原因
 
 修复：跑维护菜单的「**配置 / 刷新容器镜像**」重新导入，或手动 `incus image import` 对应的基础镜像 fingerprint。
 
-### 追加（同日实测补充）：`auto-build image failed` 的完整症状链
+### 追加（同日实测）：`auto-build image failed` 的现象、成因与排查顺序
 
-**症状**：面板创建实例时报
+**现象**：面板创建实例时报
 
 ```
 auto-build image failed: Failed to fetch instance 'builder-<时间戳>' in project 'default': Instance not found
@@ -65,7 +65,7 @@ auto-build image failed: Failed to fetch instance 'builder-<时间戳>' in proje
 1. `Instance not found` 是**表象** —— builder 是异步创建的，创建真的失败了却被旧代码吞掉（本日已修 `022f38ca7c`）。
 2. `curl: (23)` 才是**直接原因**：下载镜像时**写入端提前死亡**（实际写出的字节数远小于已投递的）。
 3. 写入端为什么死，按可能性排序：
-   - **解包/导入进程报错退出** —— 镜像格式与流程预期不符，管道对端一退，curl 立刻写不进去。**这是"Debian 能装、Alpine 装不上"最典型的原因**（两者镜像来源/格式不同）。
+   - **解包/导入进程报错退出** —— 镜像格式与流程预期不符，管道接收端退出后，curl 随即写入失败。**这是「Debian 可创建、Alpine 不可创建」的常见原因**（两者镜像来源与格式不同）。
    - **内存不足被 OOM 杀** —— 小内存母鸡解大镜像。
    - 盘满也会，但**先排除**：`df -h / /var/lib/incus` 有余量（如 5G+）即可排除。
 
@@ -97,7 +97,7 @@ readyAlias := alias + "/ready"
 GetImageAlias(readyAlias)  → 不存在则 ensureReadyImage 现场构建；构建失败即 "auto-build image failed"
 ```
 
-**一台上真实踩到的例子**（本机已有 `alpine/3.24/cloud/amd64/ready`、`debian/13/cloud/amd64/ready`、以及裸别名 `my-cloud-alpine`，全部 CONTAINER 类型）：
+**实际案例**（本机已有 `alpine/3.24/cloud/amd64/ready`、`debian/13/cloud/amd64/ready`、以及裸别名 `my-cloud-alpine`，全部 CONTAINER 类型）：
 
 | 系统 | 算出的 ready 别名 | 本机是否存在 | 结果 |
 |---|---|---|---|
@@ -133,7 +133,7 @@ incus image alias list | grep -iE "alpine|debian|ready"   # 对比算出来的 <
 
 > 配套提醒：若同时看到 `curl: (23) Failure writing output to destination`，那是**镜像导入/刷新**环节的下载写入失败（另一层，见上一节）；**判定 Alpine 能不能建，以别名是否命中为准**。
 
-### 追加：密码那条链（面板"不显示密码" / 客户登不上）
+### 追加：密码传递链路（面板未显示密码 / 无法登录）
 
 **代码事实（`manager/incus/incus.go`）**：密码全程**单向** —— 面板生成 → 随创建请求下发（`RootPassword`，L125）→ agent 暂存 `/run/runman-root-password`（L531）→ `chpasswd` 写进实例后**立即删除暂存**（L614）。
 
