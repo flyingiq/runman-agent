@@ -22,6 +22,29 @@
 
 ---
 
+## 🚨 部署与排查必读（2026-09-30 更新）
+
+> **新接手、或遇到问题，先看这三份**，能省掉 90% 的来回问：
+
+| 文件 | 用途 |
+| :--- | :--- |
+| [`UPGRADE-VERIFY.md`](UPGRADE-VERIFY.md) | **升级后判定标准** —— 判定「可以了」的硬指标 + 回滚路径 |
+| [`scripts/post-upgrade-check.sh`](scripts/post-upgrade-check.sh) | **只读体检脚本** —— 一条命令出结论（退出码 `0` 通过 / `2` 警告 / `1` 失败） |
+| [`CHANGELOG.md`](CHANGELOG.md) | **变更与排查手册** —— 每次变更、每个坑的机理与修法（持续更新） |
+
+**要点速览（细节都在 CHANGELOG）**
+
+- ✅ **升级 ≠ 完成**：脚本打印「更新完成」只代表流程跑完。必须 `bash scripts/post-upgrade-check.sh`，并到面板确认该机**在线且版本已更新**，才算真的好了。
+- ⚠️ **创建实例失败**（`auto-build image failed: ... Instance not found`）：头号真因是 **ready 别名没命中** —— 自定义基础镜像别名必须带架构后缀（`<名字>/amd64`，如 `podcctv/alpine-base/amd64`），裸别名永远命中不了 `<别名>/amd64/ready`，Alpine 会稳定走现场构建并失败（这就是「Debian 能装、Alpine 装不上」）。修法见 CHANGELOG「定案」一节。
+- ⚠️ **面板不显示密码 / 客户登不上**：密码由**面板生成、单向下发**，agent 只写进实例、**不回传也不留底** ⇒ 创建流程中途报错会**永久丢密码**。交付前必须抽查「面板能显示密码 **且** 能用它 SSH 登录」。
+- 🔧 **排障看日志**：真实原因先看 `journalctl -u incus`（自动构建镜像的失败原因在这里），agent 侧看 `journalctl -u narwhal-agent`（日志不一定落在 `/opt/narwhal-agent/*.log`）。
+- 🔐 **升级前先备份 IPv6 配置**（菜单内含备份/回滚）。升级会动：内核参数、journald、**rfw 防火墙（租户端口转发的执行者）**、镜像指纹、**IPv6/NDP** —— 最容易坏的是「租户端口转发」与「IPv6 被覆盖」，这两项在面板上看不出来。
+- 📢 **本仓库是公开仓库**：真实面板地址、对接 Token、证书私钥**一律不要提交**。
+
+**已修复（需重新编译部署才生效）**：`manager/incus/incus.go` —— builder 创建失败时**如实上抛真实原因**（此前会被伪装成 `Instance not found`，让人查不到根因）。自编译产物与发布方式见 CHANGELOG。
+
+---
+
 ## 📌 切机母鸡运维补充文档（实战沉淀）
 
 > 针对 **Debian 12 + Podman 4.x 母鸡**的两个已知致命坑位，均由真实生产事故沉淀，其他站长可直接取用：
