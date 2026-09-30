@@ -22,26 +22,26 @@
 
 ---
 
-## 🚨 部署与排查必读（2026-09-30 更新）
+## 部署与排查必读（2026-09-30 更新）
 
-> **新接手、或遇到问题，先看这三份**，能省掉 90% 的来回问：
+新接手或排查故障时，建议先阅读下列文件：
 
 | 文件 | 用途 |
 | :--- | :--- |
-| [`UPGRADE-VERIFY.md`](UPGRADE-VERIFY.md) | **升级后判定标准** —— 判定「可以了」的硬指标 + 回滚路径 |
-| [`scripts/post-upgrade-check.sh`](scripts/post-upgrade-check.sh) | **只读体检脚本** —— 一条命令出结论（退出码 `0` 通过 / `2` 警告 / `1` 失败） |
-| [`CHANGELOG.md`](CHANGELOG.md) | **变更与排查手册** —— 每次变更、每个坑的机理与修法（持续更新） |
+| [`UPGRADE-VERIFY.md`](UPGRADE-VERIFY.md) | 升级后的判定标准：可判定为「已完成」的指标与回滚路径 |
+| [`scripts/post-upgrade-check.sh`](scripts/post-upgrade-check.sh) | 只读体检脚本：一次执行给出结论（退出码 `0` 通过 / `2` 警告 / `1` 失败） |
+| [`CHANGELOG.md`](CHANGELOG.md) | 变更与排查记录：各次变更、典型故障机理与处理方式 |
 
-**要点速览（细节都在 CHANGELOG）**
+**要点**
 
-- ✅ **升级 ≠ 完成**：脚本打印「更新完成」只代表流程跑完。必须 `bash scripts/post-upgrade-check.sh`，并到面板确认该机**在线且版本已更新**，才算真的好了。
-- ⚠️ **创建实例失败**（`auto-build image failed: ... Instance not found`）：头号真因是 **ready 别名没命中** —— 自定义基础镜像别名必须带架构后缀（`<名字>/amd64`，如 `podcctv/alpine-base/amd64`），裸别名永远命中不了 `<别名>/amd64/ready`，Alpine 会稳定走现场构建并失败（这就是「Debian 能装、Alpine 装不上」）。修法见 CHANGELOG「定案」一节。
-- ⚠️ **面板不显示密码 / 客户登不上**：密码由**面板生成、单向下发**，agent 只写进实例、**不回传也不留底** ⇒ 创建流程中途报错会**永久丢密码**。交付前必须抽查「面板能显示密码 **且** 能用它 SSH 登录」。
-- 🔧 **排障看日志**：真实原因先看 `journalctl -u incus`（自动构建镜像的失败原因在这里），agent 侧看 `journalctl -u narwhal-agent`（日志不一定落在 `/opt/narwhal-agent/*.log`）。
-- 🔐 **升级前先备份 IPv6 配置**（菜单内含备份/回滚）。升级会动：内核参数、journald、**rfw 防火墙（租户端口转发的执行者）**、镜像指纹、**IPv6/NDP** —— 最容易坏的是「租户端口转发」与「IPv6 被覆盖」，这两项在面板上看不出来。
-- 📢 **本仓库是公开仓库**：真实面板地址、对接 Token、证书私钥**一律不要提交**。
+- **升级完成判定**：安装脚本输出「更新完成」仅表示流程执行完毕。需执行 `bash scripts/post-upgrade-check.sh`，并确认面板中该机处于在线状态且版本已更新，方可视为完成。
+- **创建实例失败**（提示 `auto-build image failed: ... Instance not found`）：常见原因是 **ready 别名未命中**。自定义基础镜像别名需带架构后缀（形如 `podcctv/alpine-base/amd64`）；仅使用裸别名（如 `my-cloud-alpine`）无法命中 `<别名>/amd64/ready`，Alpine 每次创建都会进入现场构建流程并失败，表现为「Debian 可创建、Alpine 不可创建」。处理方式见 CHANGELOG 对应章节。
+- **面板未显示密码 / 无法登录**：密码由面板生成后单向下发，agent 仅将其写入实例，不回传、不留存。创建流程中途报错时该密码无法恢复。交付前建议同时确认两项：面板可显示密码，且使用该密码可通过 SSH 登录。
+- **日志位置**：镜像自动构建的失败原因查看 `journalctl -u incus`；agent 侧查看 `journalctl -u narwhal-agent`（日志不固定写入 `/opt/narwhal-agent/*.log`）。
+- **升级前备份 IPv6 配置**（菜单内含备份与回滚）。升级涉及内核参数、systemd-journald、rfw 防火墙（租户端口转发的执行者）、镜像指纹与 IPv6/NDP 配置；其中租户端口转发与 IPv6 配置在面板上不可见，需重点确认。
+- **仓库规范**：本仓库为公开仓库，请勿提交真实面板地址、对接 Token 或证书私钥。
 
-**已修复（需重新编译部署才生效）**：`manager/incus/incus.go` —— builder 创建失败时**如实上抛真实原因**（此前会被伪装成 `Instance not found`，让人查不到根因）。自编译产物与发布方式见 CHANGELOG。
+**已修复（需重新编译部署后生效）**：`manager/incus/incus.go` —— builder 创建失败时如实返回真实原因（此前该错误会被后续的 `Instance not found` 覆盖）。自编译产物与发布方式见 CHANGELOG。
 
 ---
 
