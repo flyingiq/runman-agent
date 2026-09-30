@@ -49,3 +49,38 @@ journalctl -u incus --since '30 min ago' | tail -40       # 真实失败原因
 ```
 
 修复：跑维护菜单的「**配置 / 刷新容器镜像**」重新导入，或手动 `incus image import` 对应的基础镜像 fingerprint。
+
+### 追加（同日实测补充）：`auto-build image failed` 的完整症状链
+
+**症状**：面板创建实例时报
+
+```
+auto-build image failed: Failed to fetch instance 'builder-<时间戳>' in project 'default': Instance not found
+```
+
+且上方日志里有 `curl: (23) Failure writing output to destination, passed <大数> returned <小数>`。
+
+**三层解读（别被最后一层骗了）**
+
+1. `Instance not found` 是**表象** —— builder 是异步创建的，创建真的失败了却被旧代码吞掉（本日已修 `022f38ca7c`）。
+2. `curl: (23)` 才是**直接原因**：下载镜像时**写入端提前死亡**（实际写出的字节数远小于已投递的）。
+3. 写入端为什么死，按可能性排序：
+   - **解包/导入进程报错退出** —— 镜像格式与流程预期不符，管道对端一退，curl 立刻写不进去。**这是"Debian 能装、Alpine 装不上"最典型的原因**（两者镜像来源/格式不同）。
+   - **内存不足被 OOM 杀** —— 小内存母鸡解大镜像。
+   - 盘满也会，但**先排除**：`df -h / /var/lib/incus` 有余量（如 5G+）即可排除。
+
+**排查顺序（照抄即可）**
+
+```bash
+df -h / /var/lib/incus /tmp                                  # 先排除盘满
+journalctl -u incus --since '2 hours ago' | tail -40          # incusd 侧真实错误（优先看这个）
+journalctl -u narwhal-agent --since '2 hours ago' | grep -iE "curl|image|builder" | tail -30
+dmesg -T | grep -iE "oom|killed process|read-only|remount" | tail -10
+systemctl cat narwhal-agent | grep -E "ExecStart|Standard"    # 日志落点（不一定在 /opt/narwhal-agent/*.log）
+```
+
+**抓现场（最保准）**：窗口 A `journalctl -u narwhal-agent -f`，窗口 B 在面板点一次创建，把 curl 那行**完整命令行**抄下来 ——
+带 `|` 即"管道对端死"（按镜像格式处理）；带 `-o <文件>` 即"文件写不了"（查只读重挂载 / 配额）。
+
+> 另注：维护菜单/升级脚本的输出只打在终端，跑完即失。下次跑之前加留档：
+> `bash install.sh 2>&1 | tee /root/run-$(date +%F-%H%M).log`
