@@ -54,11 +54,15 @@
 - 📦 **[SELFBUILD.md](SELFBUILD.md)** — 自编译出包指南（免更 Dev 版 + 流量修复补丁注入铁律）
 - 🛠️ **[scripts/fix-traffic.sh](scripts/fix-traffic.sh)** — 流量虚高一键修复（`--calibrate` 对存量虚高数据做物理校准）
 - ⚙️ **[RELEASE-YML-SILENCE.md](RELEASE-YML-SILENCE.md)** — Fork 后必做：静默上游 `release.yml` 的 main 分支触发（避免 CI 噪音与抢跑）
+- 🩺 **[scripts/post-upgrade-check.sh](scripts/post-upgrade-check.sh)** — 升级后**只读**体检（服务 / 二进制 / rfw / 容器 / 端口转发 / IPv6 / 日志 + 回滚点），退出码 `0` 通过 · `2` 警告 · `1` 失败；判定标准见 **[UPGRADE-VERIFY.md](UPGRADE-VERIFY.md)**
 
 | 版本 | 说明 |
 | --- | --- |
 | `dev-v0.3.3-trafficfix` | 最新：免更 + **流量修复补丁**（`a90e183`），推荐母鸡使用 |
 | `dev-v0.3.2-selfbuild2` | 免更版（**不含**流量修复，仅替换自更死循环场景） |
+| **（待出包）** | 当前叉库 `main` 已含：builder 创建失败时如实返回真实原因（`022f38ca7c`）、升级体检脚本与判定文档。**尚无对应 release**，需要时按 [SELFBUILD.md](SELFBUILD.md) 重打 `dev-v*` tag 出包；在此之前现网以 `dev-v0.3.3-trafficfix` 为准 |
+
+> 流量相关修复为**两处、非同一补丁**，自编译产物建议同时包含：`a90e183`（非单调回退导致历史累计重复累加、in/out 颠倒，2026-09-22）与 `0da61a1`（Podman 4.x 统计回退读 `/proc/<pid>/net/dev`，2026-09-07）。
 
 ### 💡 为什么值得自编译（3 条，都是真金白银）
 
