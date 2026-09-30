@@ -808,8 +808,9 @@ runcmd:
 			return err
 		}
 	}
-	_ = op.Wait()
-
+	// 创建是异步操作：真正的失败（镜像拉取/解包/存储不足）发生在 op.Wait() 内部。
+	// 丢弃它的错误会伪装成后续 startVM 的 "Instance not found"，把根因藏起来，
+	// 因此这里先注册清理（避免半成品 builder 残留），再检查创建结果并如实上抛。
 	defer func() {
 		_ = m.stopVM(ctx, builderName, true)
 		op, _ := m.client.DeleteInstance(builderName)
@@ -817,6 +818,10 @@ runcmd:
 			_ = op.Wait()
 		}
 	}()
+
+	if werr := op.Wait(); werr != nil {
+		return fmt.Errorf("builder create failed (base=%s, builder=%s): %w", baseAlias, builderName, werr)
+	}
 
 	if err := m.startVM(ctx, builderName); err != nil {
 		return err
