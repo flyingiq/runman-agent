@@ -38,7 +38,7 @@
 ### 速查：Alpine 装不上 / 实例"一直在重装"
 
 Alpine 与 Debian 走的**基础镜像来源不同**：Alpine 优先用**本地定制基础镜像**，Debian 走私有镜像站 → 失败再回退上游。
-所以「**Debian 能装、Alpine 装不上**」基本等于「**那台母鸡的本地 Alpine 基础镜像缺失，或它的类型不是 container**」。
+所以「**Debian 能装、Alpine 装不上**」的第一嫌疑是**别名没命中**（见下节"定案"），其次才是基础镜像缺失或类型不对。
 
 ```bash
 incus image alias list | grep -iE "alpine|ready"          # 本地定制基础镜像别名是否存在
@@ -84,3 +84,51 @@ systemctl cat narwhal-agent | grep -E "ExecStart|Standard"    # 日志落点（�
 
 > 另注：维护菜单/升级脚本的输出只打在终端，跑完即失。下次跑之前加留档：
 > `bash install.sh 2>&1 | tee /root/run-$(date +%F-%H%M).log`
+
+### 定案（同日实测）：自定义基础镜像别名必须带 `/amd64`，否则 Alpine 永远走"现场构建"
+
+**代码规则**（`manager/incus/incus.go` L174–215）：ready 别名是<b>拼</b>出来的，不是查出来的 ——
+
+```
+alias = "alpine"  且 incus_alpine_base 非空  →  alias = <incus_alpine_base>
+否则 alpine  →  "alpine/3.24/cloud"     ｜  debian → "debian/13/cloud"
+if !strings.Contains(alias, "amd64") { alias += "/amd64" }
+readyAlias := alias + "/ready"
+GetImageAlias(readyAlias)  → 不存在则 ensureReadyImage 现场构建；构建失败即 "auto-build image failed"
+```
+
+**一台上真实踩到的例子**（本机已有 `alpine/3.24/cloud/amd64/ready`、`debian/13/cloud/amd64/ready`、以及裸别名 `my-cloud-alpine`，全部 CONTAINER 类型）：
+
+| 系统 | 算出的 ready 别名 | 本机是否存在 | 结果 |
+|---|---|---|---|
+| Debian | `debian/13/cloud/amd64/ready` | ✅ 在 | 直接用 → 成功 |
+| Alpine | `my-cloud-alpine/amd64/ready`（因 `incus_alpine_base=my-cloud-alpine`）| ❌ 不在 | 触发构建 → 用 `my-cloud-alpine/amd64` 建 builder → 别名也不存在 → 异步失败 → 表象为 `Instance not found` |
+
+**结论**：定制基础镜像的别名必须遵循 `<名字>/<架构>`（如 `podcctv/alpine-base/amd64`），裸别名（`my-cloud-alpine`）**永远不会被命中**，Alpine 会稳定走构建路径并失败。
+
+**两条修法（任选）**
+
+```bash
+# 先确认配置值
+python3 -c "import json;c=json.load(open('/opt/narwhal-agent/config.json'));print(repr(c.get('incus_alpine_base')))"
+
+# 方案 A（最快）：不使用定制基础镜像，直接吃本机已就绪的 ready 镜像
+python3 - <<'PY'
+import json; p='/opt/narwhal-agent/config.json'
+c=json.load(open(p)); c['incus_alpine_base']=''
+json.dump(c, open(p,'w'), indent=2)
+PY
+systemctl restart narwhal-agent
+
+# 方案 B（保留定制镜像）：补一个带架构后缀的别名，之后首次创建会自动构建出 .../amd64/ready
+incus image alias create my-cloud-alpine/amd64 <fingerprint>
+```
+
+**一条命令判断"是别名没命中还是镜像真缺"**：
+
+```bash
+python3 -c "import json;print(repr(json.load(open('/opt/narwhal-agent/config.json')).get('incus_alpine_base')))"
+incus image alias list | grep -iE "alpine|debian|ready"   # 对比算出来的 <别名>/amd64/ready 是否在列
+```
+
+> 配套提醒：若同时看到 `curl: (23) Failure writing output to destination`，那是**镜像导入/刷新**环节的下载写入失败（另一层，见上一节）；**判定 Alpine 能不能建，以别名是否命中为准**。
